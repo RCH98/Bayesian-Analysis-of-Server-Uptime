@@ -1,0 +1,156 @@
+---
+title: "Gibbs1"
+date: "2024-02-28"
+output: html_document
+---
+
+```{r}
+set.seed(42)
+
+#number of companies and measurements
+num_comps <- 10
+num_meas <- 50
+
+alpha_a <- 10
+beta_a <- 1
+alpha_b <- 1
+beta_b <- 1
+
+# Prior gamma distribution parameters
+initial_a <- 10
+initial_b <- 0.1
+initial_lambda <- rgamma(num_comps, shape = initial_a, rate = initial_b)
+initial_values <- c(initial_a, initial_b, initial_lambda)
+synthetic_data <- matrix(rexp(num_comps * num_meas, rate =initial_lambda), nrow = num_meas)
+synthetic_data <- t(synthetic_data)
+
+
+# Posterior function
+posterior_distribution_part_1 <- function (u, lambdas) { 
+    posterior_function_p1 <- 1
+    for (i in 1:num_meas) {  
+        for (j in 1:num_comps) {
+            posterior_function_p1 <- posterior_function_p1 * lambdas[j]*exp(-lambdas[j]*u[j][i])
+    }
+    return (posterior_function_p1)
+    }
+}
+
+
+
+posterior_distribution_part_2 <- function(a, b, lambdas) {
+    posterior_function_p2 <- 1
+    for (k in 1:num_comps) {
+        posterior_function_p2 <- posterior_function_p2 * (b^a / gamma(a)) * lambdas[k]^(a - 1) * exp(-b * lambdas[k])
+    }
+    return (posterior_function_p2)
+}
+
+posterior_distribution <- function(lambdas, a, b, alfaa, alfab, betaa, betab,u) {
+  post <- posterior_distribution_part_1(u, lambdas) * posterior_distribution_part_2(a,b, lambdas) * dgamma(a, shape = alfaa, scale=1/betaa) * dgamma(b, shape = alfab, scale=1/betab )
+}
+```
+
+```{r}
+
+
+chart_plot<-function(chain, nsample,B){
+  for (k in 1:12){
+    plot(chain[B:nsample,k], main = paste("Plot", k),type = "l")
+    acf(chain[B:nsample,k], main="Autocorrelazione")
+    selected_vectors <- chain[B:nsample,k][seq(1, length(chain[B:nsample]), by = 10)]
+    acf(selected_vectors, main="Thinned Autocorrelazione")
+    
+  }
+  
+}
+
+
+acceptance_probability <- function(old, new, alpha_a, alpha_b, beta_a, beta_b, data) {
+  
+  current_prob = posterior_distribution(lambdas=old[3:12],a = old[1], b=old[2],alfaa=alpha_a, alfab=alpha_b, betaa=beta_a, betab=beta_b, u=data)
+  proposed_prob = posterior_distribution(lambdas=new[3:12],a = new[1], b=new[2],alfaa=alpha_a, alfab=alpha_b, betaa=beta_a, betab=beta_b ,u=data)
+  
+  return (min(1, proposed_prob/current_prob))
+}
+
+
+proposal_a<- function(current_state, sd) {
+  proposed_state <- current_state + runif(1, min=-2, max=2 )
+  return(proposed_state)
+}
+
+
+sample_from_conditional_b <- function(lambdas, a,alpha_b, beta_b) {
+  m<-0
+  for (k in 1:10){
+    m<- m+lambdas[k]
+  }
+  return (rweibull(1,shape=10*a+alpha_b, scale=(10*a+alpha_b)/(beta_b+m)))
+}
+
+sample_from_conditional_lambdas<- function(number,a, b, data ) {
+  sum<-0
+  for (i in 1:50){
+    sum<-sum+data[number,i]
+  }
+  A= 50 + a
+  B= 50*sum + b
+  return(rgamma(1, shape=A, scale = 1/(B) ) )
+}
+
+gibbs_sampler <- function(initial_values,alpha_b,beta_b,alpha_a,beta_a,u, n_sample){
+
+  proposal_sd<-0.2
+  num_samples <- n_sample
+  chain <- matrix(0, nrow = num_samples, ncol = 12)
+  chain[1,1:12]<- initial_values
+  acceptance_count <- 0
+  rejection_count <- 0
+  # Gibbs Sampler
+  for (i in 2:num_samples) {
+    
+    proposed_value <- proposal_a(current_state = chain[i-1,1],sd = proposal_sd )
+    new_proposed<-c(proposed_value,chain[i-1,2:12])
+    acceptance_prob <- acceptance_probability(old=chain[i-1,1:12], new=new_proposed, alpha_a=alpha_a, alpha_b=alpha_b, beta_a=beta_a, beta_b=beta_b, data=u)
+
+    if (runif(1) < acceptance_prob) {
+      chain[i,1]<-proposed_value
+      acceptance_count <- acceptance_count + 1
+    } else {
+      chain[i,1]<-chain[i-1,1]
+      rejection_count <- rejection_count + 1
+    }
+    
+
+    chain[i,2]<-sample_from_conditional_b(lambdas=chain[i-1,3:12], a=chain[i-1,1],alpha_b=alpha_b, beta_b=beta_b )
+    for (k in 3:12){
+      chain[i,k]<-sample_from_conditional_lambdas(number=k-2,a=chain[i-1,1], b=chain[i-1,2], data=synthetic_data)
+    }
+    
+  }
+  cat("Acceptance count:", acceptance_count, "\n")
+  cat("Rejection count:", rejection_count, "\n")
+  return(chain)
+  
+}
+
+n_sample<-50000
+Burnin<-500
+chain=gibbs_sampler(initial_values,alpha_b,beta_b,alpha_a,beta_a,synthetic_data, n_sample)
+chart_plot(chain, n_sample, B=Burnin)
+
+
+
+
+
+```
+
+```{r}
+library(coda)
+mcmc_object <- mcmc(as.matrix(chain))
+
+summary_result <- summary(mcmc_object)
+
+print(summary_result)
+```
